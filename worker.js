@@ -1,43 +1,33 @@
 addEventListener('fetch', event => {
-  event.respondWith(handleRequest(event.request))
+  event.respondWith(handleRequest(event.request, event))
 })
 
-async function handleRequest(request) {
-  const { searchParams } = new URL(request.url)
-  const country = searchParams.get('country') || getRandomCountry()
-  let address, name, gender, phone
+async function handleRequest(request, env) {
+  const url = new URL(request.url)
 
-  for (let i = 0; i < 100; i++) {
-    const location = getRandomLocationInCountry(country)
-    const apiUrl = `https://nominatim.openstreetmap.org/reverse?format=json&lat=${location.lat}&lon=${location.lng}&zoom=18&addressdetails=1`
-
-    const response = await fetch(apiUrl, {
-      headers: { 'User-Agent': 'Cloudflare Worker' }
-    })
-    const data = await response.json()
-
-    if (data && data.address && data.address.house_number && data.address.road && (data.address.city || data.address.town)) {
-      address = formatAddress(data.address, country)
-      break
+  if (url.pathname === '/api/address') {
+    if (!isAuthorized(request, env)) {
+      return jsonResponse({ error: 'unauthorized' }, 401)
     }
+
+    const result = await generateAddressProfile(url.searchParams)
+    if (result.error) {
+      return jsonResponse({ error: result.error }, 500)
+    }
+
+    return jsonResponse(result)
   }
 
-  if (!address) {
+  if (url.pathname !== '/') {
+    return new Response('Not Found', { status: 404 })
+  }
+
+  const result = await generateAddressProfile(url.searchParams)
+  if (result.error) {
     return new Response('Failed to retrieve detailed address, please refresh the interface （检索详细地址失败，请刷新界面）', { status: 500 })
   }
 
-  const userData = await fetch('https://randomuser.me/api/')
-  const userJson = await userData.json()
-  if (userJson && userJson.results && userJson.results.length > 0) {
-    const user = userJson.results[0]
-    name = `${user.name.first} ${user.name.last}`
-    gender = user.gender.charAt(0).toUpperCase() + user.gender.slice(1)
-    phone = getRandomPhoneNumber(country)
-  } else {
-    name = getRandomName()
-    gender = "Unknown"
-    phone = getRandomPhoneNumber(country)
-  }
+  const { country, address, name, gender, phone } = result
 
 const html = `
 <!DOCTYPE html>
@@ -267,10 +257,91 @@ const html = `
 </html>
 `
 
-
-
   return new Response(html, {
     headers: { 'content-type': 'text/html;charset=UTF-8' },
+  })
+}
+
+async function generateAddressProfile(searchParams) {
+  const country = searchParams.get('country') || getRandomCountry()
+  let address
+  let name
+  let gender
+  let phone
+
+  for (let i = 0; i < 100; i++) {
+    const location = getRandomLocationInCountry(country)
+    const apiUrl = `https://nominatim.openstreetmap.org/reverse?format=json&lat=${location.lat}&lon=${location.lng}&zoom=18&addressdetails=1`
+
+    const response = await fetch(apiUrl, {
+      headers: { 'User-Agent': 'Cloudflare Worker' }
+    })
+    const data = await response.json()
+
+    if (data && data.address && data.address.house_number && data.address.road && (data.address.city || data.address.town)) {
+      address = formatAddress(data.address, country)
+      break
+    }
+  }
+
+  if (!address) {
+    return { error: 'failed_to_retrieve_address' }
+  }
+
+  const userData = await fetch('https://randomuser.me/api/')
+  const userJson = await userData.json()
+  if (userJson && userJson.results && userJson.results.length > 0) {
+    const user = userJson.results[0]
+    name = `${user.name.first} ${user.name.last}`
+    gender = user.gender.charAt(0).toUpperCase() + user.gender.slice(1)
+    phone = getRandomPhoneNumber(country)
+  } else {
+    name = getRandomName()
+    gender = 'Unknown'
+    phone = getRandomPhoneNumber(country)
+  }
+
+  return { country, address, name, gender, phone }
+}
+
+function getBearerToken(request) {
+  const authorization = request.headers.get('Authorization')
+  if (!authorization) {
+    return null
+  }
+
+  const match = authorization.match(/^Bearer\s+(.+)$/)
+  return match ? match[1] : null
+}
+
+function isAuthorized(request, env) {
+  const expectedToken = (env && env.API_TOKEN) || globalThis.API_TOKEN
+  const providedToken = getBearerToken(request)
+
+  if (!expectedToken || !providedToken) {
+    return false
+  }
+
+  return timingSafeEqual(providedToken, expectedToken)
+}
+
+function timingSafeEqual(a, b) {
+  if (a.length !== b.length) {
+    return false
+  }
+
+  let mismatch = 0
+  for (let i = 0; i < a.length; i++) {
+    mismatch |= a.charCodeAt(i) ^ b.charCodeAt(i)
+  }
+
+  return mismatch === 0
+}
+
+function jsonResponse(data, status = 200) {
+  return new Response(JSON.stringify(data), {
+    status,
+    headers: { 'content-type': 'application/json;charset=UTF-8' }
   })
 }
 
