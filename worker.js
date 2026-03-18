@@ -2,44 +2,61 @@ addEventListener('fetch', event => {
   event.respondWith(handleRequest(event.request))
 })
 
+const COUNTRY_OPTIONS = [
+  { name: "United States 美国", code: "US" },
+  { name: "United Kingdom 英国", code: "UK" },
+  { name: "France 法国", code: "FR" },
+  { name: "Germany 德国", code: "DE" },
+  { name: "China 中国", code: "CN" },
+  { name: "Taiwan 中国台湾", code: "TW" },
+  { name: "Hong Kong 中国香港", code: "HK" },
+  { name: "Japan 日本", code: "JP" },
+  { name: "India 印度", code: "IN" },
+  { name: "Australia 澳大利亚", code: "AU" },
+  { name: "Brazil 巴西", code: "BR" },
+  { name: "Canada 加拿大", code: "CA" },
+  { name: "Russia 俄罗斯", code: "RU" },
+  { name: "South Africa 南非", code: "ZA" },
+  { name: "Mexico 墨西哥", code: "MX" },
+  { name: "South Korea 韩国", code: "KR" },
+  { name: "Italy 意大利", code: "IT" },
+  { name: "Spain 西班牙", code: "ES" },
+  { name: "Turkey 土耳其", code: "TR" },
+  { name: "Saudi Arabia 沙特阿拉伯", code: "SA" },
+  { name: "Argentina 阿根廷", code: "AR" },
+  { name: "Egypt 埃及", code: "EG" },
+  { name: "Nigeria 尼日利亚", code: "NG" },
+  { name: "Indonesia 印度尼西亚", code: "ID" }
+]
+
+const SUPPORTED_COUNTRIES = new Set(COUNTRY_OPTIONS.map(({ code }) => code))
+
 async function handleRequest(request) {
-  const { searchParams } = new URL(request.url)
-  const country = searchParams.get('country') || getRandomCountry()
-  let address, name, gender, phone
+  const url = new URL(request.url)
 
-  for (let i = 0; i < 100; i++) {
-    const location = getRandomLocationInCountry(country)
-    const apiUrl = `https://nominatim.openstreetmap.org/reverse?format=json&lat=${location.lat}&lon=${location.lng}&zoom=18&addressdetails=1`
+  if (url.pathname === '/') {
+    return handlePageRequest(url)
+  }
 
-    const response = await fetch(apiUrl, {
-      headers: { 'User-Agent': 'Cloudflare Worker' }
-    })
-    const data = await response.json()
+  if (url.pathname === '/api/v1/address') {
+    return handleApiRequest(request, url)
+  }
 
-    if (data && data.address && data.address.house_number && data.address.road && (data.address.city || data.address.town)) {
-      address = formatAddress(data.address, country)
-      break
+  return jsonResponse({
+    success: false,
+    error: {
+      code: 'not_found',
+      message: 'Route not found'
     }
-  }
+  }, 404)
+}
 
-  if (!address) {
-    return new Response('Failed to retrieve detailed address, please refresh the interface （检索详细地址失败，请刷新界面）', { status: 500 })
-  }
+async function handlePageRequest(url) {
+  const country = normalizeCountry(url.searchParams.get('country')) || getRandomCountry()
+  const profile = await generateProfile(country)
+  const { name, gender, phone, address } = profile
 
-  const userData = await fetch('https://randomuser.me/api/')
-  const userJson = await userData.json()
-  if (userJson && userJson.results && userJson.results.length > 0) {
-    const user = userJson.results[0]
-    name = `${user.name.first} ${user.name.last}`
-    gender = user.gender.charAt(0).toUpperCase() + user.gender.slice(1)
-    phone = getRandomPhoneNumber(country)
-  } else {
-    name = getRandomName()
-    gender = "Unknown"
-    phone = getRandomPhoneNumber(country)
-  }
-
-const html = `
+  const html = `
 <!DOCTYPE html>
 <html>
 <head>
@@ -126,9 +143,9 @@ const html = `
       display: none;
     }
     .subtitle-small {
-      font-size: 1.2em; 
+      font-size: 1.2em;
       margin-bottom: 20px;
-    } 
+    }
     .saved-addresses {
       width: 100%;
       border-collapse: collapse;
@@ -152,7 +169,7 @@ const html = `
     }
     .delete-btn:hover {
       background-color: #c82333;
-    }   
+    }
   </style>
 </head>
 <body>
@@ -161,10 +178,10 @@ const html = `
   <div class="subtitle-small">Click to copy information（点击即可复制信息）</div>
   <div class="container">
     <div class="copied" id="copied">Copied!</div>
-    <div class="name" onclick="copyToClipboard('${name}')">${name}</div>
-    <div class="gender" onclick="copyToClipboard('${gender}')">${gender}</div>
-    <div class="phone" onclick="copyToClipboard('${phone.replace(/[()\s-]/g, '')}')">${phone}</div>
-    <div class="address" onclick="copyToClipboard('${address}')">${address}</div>
+    <div class="name" onclick="copyToClipboard('${escapeForTemplateLiteral(name)}')">${escapeHtml(name)}</div>
+    <div class="gender" onclick="copyToClipboard('${escapeForTemplateLiteral(gender)}')">${escapeHtml(gender)}</div>
+    <div class="phone" onclick="copyToClipboard('${escapeForTemplateLiteral(phone.replace(/[()\s-]/g, ''))}')">${escapeHtml(phone)}</div>
+    <div class="address" onclick="copyToClipboard('${escapeForTemplateLiteral(address)}')">${escapeHtml(address)}</div>
     <button class="refresh-btn" onclick="window.location.reload();">Get Another Address 获取新地址</button>
     <button class="refresh-btn" onclick="saveAddress();">Save Address 保存地址</button>
     <div class="country-select">
@@ -187,7 +204,6 @@ const html = `
         </tr>
       </thead>
       <tbody>
-        <!-- 动态生成的内容 -->
       </tbody>
     </table>
     </div>
@@ -214,18 +230,16 @@ const html = `
       const savedAddresses = JSON.parse(localStorage.getItem('savedAddresses') || '[]');
       const newEntry = {
         note: note,
-        name: '${name}',
-        gender: '${gender}',
-        phone: '${phone.replace(/[()\\s-]/g, '')}',
-        address: '${address}'
+        name: '${escapeForTemplateLiteral(name)}',
+        gender: '${escapeForTemplateLiteral(gender)}',
+        phone: '${escapeForTemplateLiteral(phone.replace(/[()\s-]/g, ''))}',
+        address: '${escapeForTemplateLiteral(address)}'
       };
       savedAddresses.push(newEntry);
       localStorage.setItem('savedAddresses', JSON.stringify(savedAddresses));
       renderSavedAddresses();
     }
-    
 
-    // 渲染保存的地址
     function renderSavedAddresses() {
       const savedAddresses = JSON.parse(localStorage.getItem('savedAddresses') || '[]');
       const tbody = document.getElementById('savedAddressesTable').getElementsByTagName('tbody')[0];
@@ -239,7 +253,6 @@ const html = `
         const phoneCell = row.insertCell();
         const addressCell = row.insertCell();
 
-        // 删除按钮
         const deleteBtn = document.createElement('button');
         deleteBtn.textContent = '删除 Delete';
         deleteBtn.className = 'delete-btn';
@@ -258,7 +271,6 @@ const html = `
       });
     }
 
-    // 页面加载时渲染已保存的地址
     window.onload = function() {
       renderSavedAddresses();
     };
@@ -267,11 +279,156 @@ const html = `
 </html>
 `
 
-
-
   return new Response(html, {
     headers: { 'content-type': 'text/html;charset=UTF-8' },
   })
+}
+
+async function handleApiRequest(request, url) {
+  if (request.method !== 'GET') {
+    return jsonResponse({
+      success: false,
+      error: {
+        code: 'method_not_allowed',
+        message: 'Only GET is supported'
+      }
+    }, 405)
+  }
+
+  const configuredToken = getApiToken()
+  if (!configuredToken) {
+    return jsonResponse({
+      success: false,
+      error: {
+        code: 'token_not_configured',
+        message: 'API_TOKEN binding is not configured on the Worker'
+      }
+    }, 500)
+  }
+
+  const authorization = request.headers.get('Authorization') || ''
+  const expected = `Bearer ${configuredToken}`
+  if (authorization !== expected) {
+    return jsonResponse({
+      success: false,
+      error: {
+        code: 'unauthorized',
+        message: 'Missing or invalid Bearer token'
+      }
+    }, 401, { 'WWW-Authenticate': 'Bearer realm="Real Address Generator API"' })
+  }
+
+  const country = normalizeCountry(url.searchParams.get('country'))
+  if (!country) {
+    return jsonResponse({
+      success: false,
+      error: {
+        code: 'invalid_country',
+        message: 'country must be one of the supported ISO-like country codes',
+        supportedCountries: Array.from(SUPPORTED_COUNTRIES)
+      }
+    }, 400)
+  }
+
+  const profile = await generateProfile(country)
+  return jsonResponse({
+    success: true,
+    data: profile
+  })
+}
+
+async function generateProfile(country) {
+  let address
+
+  for (let i = 0; i < 100; i++) {
+    const location = getRandomLocationInCountry(country)
+    const apiUrl = `https://nominatim.openstreetmap.org/reverse?format=json&lat=${location.lat}&lon=${location.lng}&zoom=18&addressdetails=1`
+
+    const response = await fetch(apiUrl, {
+      headers: { 'User-Agent': 'Cloudflare Worker' }
+    })
+    const data = await response.json()
+
+    if (data && data.address && data.address.house_number && data.address.road && (data.address.city || data.address.town || data.address.village)) {
+      address = formatAddress(data.address, country)
+      break
+    }
+  }
+
+  if (!address) {
+    throw new Error('Failed to retrieve detailed address')
+  }
+
+  const userData = await fetch('https://randomuser.me/api/')
+  const userJson = await userData.json()
+
+  let name
+  let gender
+  let phone = getRandomPhoneNumber(country)
+
+  if (userJson && userJson.results && userJson.results.length > 0) {
+    const user = userJson.results[0]
+    name = `${user.name.first} ${user.name.last}`
+    gender = user.gender.charAt(0).toUpperCase() + user.gender.slice(1)
+  } else {
+    name = getRandomName()
+    gender = 'Unknown'
+  }
+
+  return {
+    country,
+    name,
+    gender,
+    phone,
+    address
+  }
+}
+
+function normalizeCountry(country) {
+  if (!country) return null
+  const normalized = country.toUpperCase()
+  return SUPPORTED_COUNTRIES.has(normalized) ? normalized : null
+}
+
+function getApiToken() {
+  if (typeof API_TOKEN !== 'undefined') {
+    return API_TOKEN
+  }
+
+  if (typeof globalThis !== 'undefined' && typeof globalThis.API_TOKEN !== 'undefined') {
+    return globalThis.API_TOKEN
+  }
+
+  return ''
+}
+
+function jsonResponse(payload, status = 200, extraHeaders = {}) {
+  return new Response(JSON.stringify(payload, null, 2), {
+    status,
+    headers: {
+      'content-type': 'application/json;charset=UTF-8',
+      ...extraHeaders
+    }
+  })
+}
+
+function escapeHtml(value) {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
+}
+
+function escapeForTemplateLiteral(value) {
+  return value
+    .replace(/\\/g, '\\\\')
+    .replace(/`/g, '\\`')
+    .replace(/\$/g, '\\$')
+    .replace(/'/g, "\\'")
+    .replace(/\n/g, '\\n')
+    .replace(/\r/g, '\\r')
 }
 
 function getRandomLocationInCountry(country) {
@@ -472,4 +629,13 @@ function getCountryOptions(selectedCountry) {
     { name: "Indonesia 印度尼西亚", code: "ID" }
   ]
   return countries.map(({ name, code }) => `<option value="${code}" ${code === selectedCountry ? 'selected' : ''}>${name}</option>`).join('')
+}
+
+
+function getRandomName() {
+  const firstNames = ['Alex', 'Jordan', 'Taylor', 'Morgan', 'Casey']
+  const lastNames = ['Smith', 'Johnson', 'Brown', 'Davis', 'Wilson']
+  const firstName = firstNames[Math.floor(Math.random() * firstNames.length)]
+  const lastName = lastNames[Math.floor(Math.random() * lastNames.length)]
+  return `${firstName} ${lastName}`
 }
