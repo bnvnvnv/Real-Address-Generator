@@ -3,43 +3,34 @@ addEventListener('fetch', event => {
 })
 
 async function handleRequest(request) {
-  const { searchParams } = new URL(request.url)
+  const url = new URL(request.url)
+  const { pathname, searchParams } = url
   const country = searchParams.get('country') || getRandomCountry()
-  let address, name, gender, phone
 
-  for (let i = 0; i < 100; i++) {
-    const location = getRandomLocationInCountry(country)
-    const apiUrl = `https://nominatim.openstreetmap.org/reverse?format=json&lat=${location.lat}&lon=${location.lng}&zoom=18&addressdetails=1`
-
-    const response = await fetch(apiUrl, {
-      headers: { 'User-Agent': 'Cloudflare Worker' }
-    })
-    const data = await response.json()
-
-    if (data && data.address && data.address.house_number && data.address.road && (data.address.city || data.address.town)) {
-      address = formatAddress(data.address, country)
-      break
+  if (request.method === 'GET' && pathname === '/api/address') {
+    try {
+      const payload = await generateAddressPayload(country)
+      return jsonResponse(payload)
+    } catch (error) {
+      return jsonResponse({
+        error: 'Failed to retrieve detailed address, please refresh the interface （检索详细地址失败，请刷新界面）'
+      }, 500)
     }
   }
 
-  if (!address) {
+  if (request.method !== 'GET' || pathname !== '/') {
+    return new Response('Not Found', { status: 404 })
+  }
+
+  let payload
+  try {
+    payload = await generateAddressPayload(country)
+  } catch (error) {
     return new Response('Failed to retrieve detailed address, please refresh the interface （检索详细地址失败，请刷新界面）', { status: 500 })
   }
 
-  const userData = await fetch('https://randomuser.me/api/')
-  const userJson = await userData.json()
-  if (userJson && userJson.results && userJson.results.length > 0) {
-    const user = userJson.results[0]
-    name = `${user.name.first} ${user.name.last}`
-    gender = user.gender.charAt(0).toUpperCase() + user.gender.slice(1)
-    phone = getRandomPhoneNumber(country)
-  } else {
-    name = getRandomName()
-    gender = "Unknown"
-    phone = getRandomPhoneNumber(country)
-  }
-
-const html = `
+  const { address, gender, name, phone } = payload
+  const html = `
 <!DOCTYPE html>
 <html>
 <head>
@@ -271,6 +262,61 @@ const html = `
 
   return new Response(html, {
     headers: { 'content-type': 'text/html;charset=UTF-8' },
+  })
+}
+
+async function generateAddressPayload(country) {
+  let address
+
+  for (let i = 0; i < 100; i++) {
+    const location = getRandomLocationInCountry(country)
+    const apiUrl = `https://nominatim.openstreetmap.org/reverse?format=json&lat=${location.lat}&lon=${location.lng}&zoom=18&addressdetails=1`
+
+    const response = await fetch(apiUrl, {
+      headers: { 'User-Agent': 'Cloudflare Worker' }
+    })
+    const data = await response.json()
+
+    if (data && data.address && data.address.house_number && data.address.road && (data.address.city || data.address.town || data.address.village)) {
+      address = formatAddress(data.address, country)
+      break
+    }
+  }
+
+  if (!address) {
+    throw new Error('address_not_found')
+  }
+
+  const userData = await fetch('https://randomuser.me/api/')
+  const userJson = await userData.json()
+
+  let name
+  let gender
+  if (userJson && userJson.results && userJson.results.length > 0) {
+    const user = userJson.results[0]
+    name = `${user.name.first} ${user.name.last}`
+    gender = user.gender.charAt(0).toUpperCase() + user.gender.slice(1)
+  } else {
+    name = 'Unknown'
+    gender = 'Unknown'
+  }
+
+  const phone = getRandomPhoneNumber(country)
+
+  return {
+    country,
+    name,
+    gender,
+    phone,
+    address,
+    mapQuery: address
+  }
+}
+
+function jsonResponse(data, status = 200) {
+  return new Response(JSON.stringify(data), {
+    status,
+    headers: { 'content-type': 'application/json;charset=UTF-8' },
   })
 }
 
